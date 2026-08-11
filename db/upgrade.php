@@ -1,5 +1,5 @@
 <?php
-// This file is part of Moodle - http://moodle.org/
+// This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -8,31 +8,29 @@
 //
 // Moodle is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+// along with Moodle. If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Upgrade steps for local_completionsuspend.
+ * Upgrade script for local_completionsuspend.
  *
  * @package    local_completionsuspend
- * @copyright  2026 LMS-Labs
- * @license    http://www.gnu.org/licenses/gpl-3.0.html GNU GPL v3 or later
+ * @copyright  2026 LMS Hosting Services
+ * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
 defined('MOODLE_INTERNAL') || die();
 
 /**
- * Execute local_completionsuspend upgrade from the given old version.
+ * Run all local_completionsuspend upgrade steps.
  *
- * @param int $oldversion
+ * @param int $oldversion The version we are upgrading from.
  * @return bool
  */
-function xmldb_local_completionsuspend_upgrade($oldversion) {
-    if ($oldversion < 2026073100) {
-        upgrade_plugin_savepoint(true, 2026073100, 'local', 'completionsuspend');
-    }
+function xmldb_local_completionsuspend_upgrade(int $oldversion): bool {
+    // Future upgrade steps go here.
     return true;
 }
