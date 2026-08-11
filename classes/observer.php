@@ -28,7 +28,6 @@ namespace local_completionsuspend;
  * Observer class — responds to Moodle core events.
  */
 class observer {
-
     /**
      * React to the course_completed event.
      *

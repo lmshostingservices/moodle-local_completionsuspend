@@ -36,7 +36,6 @@ use core\task\scheduled_task;
  * Reconciliation task.
  */
 class reconcile extends scheduled_task {
-
     /**
      * Return the task name shown in the admin UI.
      *
