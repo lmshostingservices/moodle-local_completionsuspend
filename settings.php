@@ -8,11 +8,11 @@
 //
 // Moodle is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Moodle. If not, see <https://www.gnu.org/licenses/>.
+// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
  * Admin settings for local_completionsuspend.
@@ -25,8 +25,10 @@
 defined('MOODLE_INTERNAL') || die();
 
 if ($hassiteconfig) {
-    $ADMIN->add('localplugins', new admin_category('local_completionsuspend_cat',
-        get_string('pluginname', 'local_completionsuspend')));
+    $ADMIN->add('localplugins', new admin_category(
+        'local_completionsuspend_cat',
+        get_string('pluginname', 'local_completionsuspend')
+    ));
 
     // Link to the dashboard.
     $ADMIN->add('local_completionsuspend_cat', new admin_externalpage(
@@ -37,8 +39,10 @@ if ($hassiteconfig) {
     ));
 
     // Plugin settings.
-    $settings = new admin_settingpage('local_completionsuspend_settings',
-        get_string('pluginname', 'local_completionsuspend') . ' — ' . get_string('settings'));
+    $settings = new admin_settingpage(
+        'local_completionsuspend_settings',
+        get_string('pluginname', 'local_completionsuspend') . ' - ' . get_string('settings')
+    );
 
     $settings->add(new admin_setting_configcheckbox(
         'local_completionsuspend/masterswitch',

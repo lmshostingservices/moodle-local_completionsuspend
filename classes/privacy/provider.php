@@ -8,11 +8,11 @@
 //
 // Moodle is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Moodle. If not, see <https://www.gnu.org/licenses/>.
+// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
  * Privacy provider for local_completionsuspend.
@@ -36,8 +36,8 @@ use core_privacy\local\request\writer;
  */
 class provider implements
     \core_privacy\local\metadata\provider,
-    \core_privacy\local\request\plugin\provider,
-    \core_privacy\local\request\core_userlist_provider {
+    \core_privacy\local\request\core_userlist_provider,
+    \core_privacy\local\request\plugin\provider {
     /**
      * Return metadata about stored user data.
      *
@@ -46,11 +46,12 @@ class provider implements
      */
     public static function get_metadata(collection $collection): collection {
         $collection->add_database_table('local_completionsuspend_log', [
-            'userid'      => 'privacy:metadata:local_completionsuspend_log:userid',
-            'courseid'    => 'privacy:metadata:local_completionsuspend_log:courseid',
-            'action'      => 'privacy:metadata:local_completionsuspend_log:action',
+            'userid' => 'privacy:metadata:local_completionsuspend_log:userid',
+            'courseid' => 'privacy:metadata:local_completionsuspend_log:courseid',
+            'action' => 'privacy:metadata:local_completionsuspend_log:action',
+            'triggertype' => 'privacy:metadata:local_completionsuspend_log:triggertype',
             'timecreated' => 'privacy:metadata:local_completionsuspend_log:timecreated',
-            'simulated'   => 'privacy:metadata:local_completionsuspend_log:simulated',
+            'simulated' => 'privacy:metadata:local_completionsuspend_log:simulated',
         ], 'privacy:metadata:local_completionsuspend_log');
         return $collection;
     }
@@ -63,12 +64,11 @@ class provider implements
      */
     public static function get_contexts_for_userid(int $userid): contextlist {
         $contextlist = new contextlist();
-        $contextlist->add_from_sql("
-            SELECT DISTINCT ctx.id
-              FROM {local_completionsuspend_log} l
-              JOIN {context} ctx ON ctx.instanceid = l.courseid AND ctx.contextlevel = :level
-             WHERE l.userid = :userid
-        ", ['level' => CONTEXT_COURSE, 'userid' => $userid]);
+        $sql = "SELECT DISTINCT ctx.id
+                  FROM {local_completionsuspend_log} l
+                  JOIN {context} ctx ON ctx.instanceid = l.courseid AND ctx.contextlevel = :level
+                 WHERE l.userid = :userid";
+        $contextlist->add_from_sql($sql, ['level' => CONTEXT_COURSE, 'userid' => $userid]);
         return $contextlist;
     }
 
@@ -82,9 +82,11 @@ class provider implements
         if ($context->contextlevel !== CONTEXT_COURSE) {
             return;
         }
-        $userlist->add_from_sql('userid',
+        $userlist->add_from_sql(
+            'userid',
             'SELECT userid FROM {local_completionsuspend_log} WHERE courseid = :cid',
-            ['cid' => $context->instanceid]);
+            ['cid' => $context->instanceid]
+        );
     }
 
     /**

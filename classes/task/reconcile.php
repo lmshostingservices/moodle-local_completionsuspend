@@ -8,20 +8,14 @@
 //
 // Moodle is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Moodle. If not, see <https://www.gnu.org/licenses/>.
+// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Scheduled task: reconcile completion → suspension state.
- *
- * Handles:
- *  - Retroactive backfill: suspend learners who completed before
- *    the course was added to scope.
- *  - Re-activation: if a completion was reset, re-activate
- *    enrolments this plugin previously suspended.
+ * Scheduled task: reconcile completion to suspension state.
  *
  * @package    local_completionsuspend
  * @copyright  2026 LMS Hosting Services
@@ -34,132 +28,212 @@ use core\task\scheduled_task;
 
 /**
  * Reconciliation task.
+ *
+ * Handles retroactive backfill (suspend learners who completed before the course was
+ * added to scope) and re-activation (restore enrolments we suspended whose completion
+ * has since been reset).
  */
 class reconcile extends scheduled_task {
+    /** @var int Maximum category tree depth walked when expanding a category target. */
+    const MAX_CAT_DEPTH = 50;
+
     /**
      * Return the task name shown in the admin UI.
      *
      * @return string
      */
     public function get_name(): string {
-        return get_string('pluginname', 'local_completionsuspend') . ' — reconcile';
+        return get_string('taskreconcile', 'local_completionsuspend');
     }
 
     /**
-     * Run the task.
+     * Run the task from cron.
      */
     public function execute(): void {
-        global $DB, $CFG;
+        $result = $this->run_reconciliation((int)$this->get_last_run_time());
+        mtrace("  local_completionsuspend: suspended {$result['suspended']}, "
+            . "reactivated {$result['reactivated']}");
+    }
+
+    /**
+     * Run a full reconciliation immediately, ignoring the incremental window.
+     *
+     * Used by the "Run reconciliation now" button on the dashboard.
+     *
+     * @return array{suspended: int, reactivated: int}
+     */
+    public function run_now(): array {
+        return $this->run_reconciliation(0);
+    }
+
+    /**
+     * Reconcile every in-scope course.
+     *
+     * @param int $since Only consider completions recorded after this timestamp.
+     *                   Pass 0 for a full scan.
+     * @return array{suspended: int, reactivated: int}
+     */
+    protected function run_reconciliation(int $since): array {
+        global $CFG;
         require_once($CFG->dirroot . '/local/completionsuspend/lib.php');
 
+        $totals = ['suspended' => 0, 'reactivated' => 0];
+
         if (!get_config('local_completionsuspend', 'masterswitch')) {
-            return;
+            return $totals;
         }
 
         $simulated = (bool)get_config('local_completionsuspend', 'simulationmode');
         $retroactive = (bool)get_config('local_completionsuspend', 'retroactive');
-        $reactivate  = (bool)get_config('local_completionsuspend', 'reactivateonreset');
+        $reactivate = (bool)get_config('local_completionsuspend', 'reactivateonreset');
 
-        // Get all in-scope course IDs.
-        $directcourses = $DB->get_fieldset_select(
-            'local_completionsuspend_target', 'targetid', "targettype = 'course' AND enabled = 1");
-
-        $allcourses = array_unique($directcourses);
-
-        // Add courses from enabled categories.
-        $cats = $DB->get_records('local_completionsuspend_target', ['targettype' => 'category', 'enabled' => 1]);
-        foreach ($cats as $cat) {
-            $courseids = $this->courses_in_category((int)$cat->targetid);
-            $allcourses = array_unique(array_merge($allcourses, $courseids));
-        }
-
-        foreach ($allcourses as $courseid) {
+        foreach ($this->get_courses_in_scope() as $courseid) {
             if ($retroactive) {
-                $this->backfill_completed($courseid, $simulated);
+                $totals['suspended'] += $this->backfill_completed($courseid, $simulated, $since);
             }
             if ($reactivate) {
-                $this->reactivate_reset($courseid, $simulated);
+                // Re-activation always scans in full: it is driven by the absence of a
+                // completion record, which has no timestamp to window on.
+                $totals['reactivated'] += $this->reactivate_reset($courseid, $simulated);
             }
         }
+
+        return $totals;
     }
 
     /**
-     * Suspend learners who completed the course but are still active.
+     * Resolve every course id currently in scope, from both course and category targets.
      *
-     * @param int  $courseid
-     * @param bool $simulated
-     */
-    private function backfill_completed(int $courseid, bool $simulated): void {
-        global $DB;
-
-        // Find completed, active enrolments not already logged as suspended.
-        $completed = $DB->get_records_sql("
-            SELECT cc.userid
-              FROM {course_completions} cc
-             WHERE cc.course   = :cid
-               AND cc.timecompleted IS NOT NULL
-               AND cc.timecompleted > 0
-               AND NOT EXISTS (
-                   SELECT 1 FROM {local_completionsuspend_log} l
-                    WHERE l.userid   = cc.userid
-                      AND l.courseid = cc.course
-                      AND l.action   = 'suspended'
-                      AND l.simulated = 0
-               )
-        ", ['cid' => $courseid]);
-
-        foreach ($completed as $row) {
-            local_completionsuspend_suspend_user((int)$row->userid, $courseid, $simulated, 'task');
-        }
-    }
-
-    /**
-     * Re-activate users whose completion was reset but who are still suspended.
-     *
-     * @param int  $courseid
-     * @param bool $simulated
-     */
-    private function reactivate_reset(int $courseid, bool $simulated): void {
-        global $DB;
-
-        // Find users this plugin suspended who no longer have a completion record.
-        $suspended = $DB->get_records_sql("
-            SELECT DISTINCT l.userid
-              FROM {local_completionsuspend_log} l
-             WHERE l.courseid  = :cid
-               AND l.action    = 'suspended'
-               AND l.simulated = 0
-               AND NOT EXISTS (
-                   SELECT 1 FROM {course_completions} cc
-                    WHERE cc.userid          = l.userid
-                      AND cc.course          = l.courseid
-                      AND cc.timecompleted IS NOT NULL
-                      AND cc.timecompleted   > 0
-               )
-        ", ['cid' => $courseid]);
-
-        foreach ($suspended as $row) {
-            local_completionsuspend_reactivate_user((int)$row->userid, $courseid, $simulated);
-        }
-    }
-
-    /**
-     * Return all course IDs in a category (and sub-categories if setting is on).
-     *
-     * @param int $catid
      * @return int[]
      */
-    private function courses_in_category(int $catid): array {
+    protected function get_courses_in_scope(): array {
         global $DB;
+
+        $courseids = $DB->get_fieldset_select(
+            'local_completionsuspend_target',
+            'targetid',
+            'targettype = :type AND enabled = 1',
+            ['type' => 'course']
+        );
+
+        $cats = $DB->get_fieldset_select(
+            'local_completionsuspend_target',
+            'targetid',
+            'targettype = :type AND enabled = 1',
+            ['type' => 'category']
+        );
+
+        $cascade = (bool)get_config('local_completionsuspend', 'includesubcategories');
+
+        foreach ($cats as $catid) {
+            $courseids = array_merge(
+                $courseids,
+                $this->courses_in_category((int)$catid, $cascade, [], 0)
+            );
+        }
+
+        $courseids = array_unique(array_map('intval', $courseids));
+
+        return array_values(array_filter($courseids, function ($id) {
+            return $id != SITEID;
+        }));
+    }
+
+    /**
+     * Suspend learners who completed the course but are still actively enrolled.
+     *
+     * @param int  $courseid
+     * @param bool $simulated
+     * @param int  $since Only consider completions recorded after this timestamp (0 = all).
+     * @return int Number of enrolments suspended.
+     */
+    protected function backfill_completed(int $courseid, bool $simulated, int $since = 0): int {
+        global $DB;
+
+        $params = ['cid' => $courseid];
+        $sincesql = '';
+        if ($since > 0) {
+            // Small overlap so a completion recorded mid-run is not missed.
+            $params['since'] = $since - DAYSECS;
+            $sincesql = ' AND cc.timecompleted > :since';
+        }
+
+        $sql = "SELECT DISTINCT cc.userid
+                  FROM {course_completions} cc
+                  JOIN {user_enrolments} ue ON ue.userid = cc.userid
+                  JOIN {enrol} e ON e.id = ue.enrolid AND e.courseid = cc.course
+                 WHERE cc.course = :cid
+                   AND cc.timecompleted > 0
+                   AND ue.status = " . ENROL_USER_ACTIVE . "
+                   {$sincesql}";
+        $completed = $DB->get_fieldset_sql($sql, $params);
+
+        $count = 0;
+        foreach ($completed as $userid) {
+            $count += local_completionsuspend_suspend_user((int)$userid, $courseid, $simulated, 'task');
+        }
+
+        return $count;
+    }
+
+    /**
+     * Re-activate users whose completion was reset but who are still suspended by us.
+     *
+     * @param int  $courseid
+     * @param bool $simulated
+     * @return int Number of enrolments re-activated.
+     */
+    protected function reactivate_reset(int $courseid, bool $simulated): int {
+        global $DB;
+
+        $sql = "SELECT DISTINCT l.userid
+                  FROM {local_completionsuspend_log} l
+                 WHERE l.courseid = :cid
+                   AND l.action = 'suspended'
+                   AND l.simulated = 0
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM {course_completions} cc
+                        WHERE cc.userid = l.userid
+                          AND cc.course = l.courseid
+                          AND cc.timecompleted > 0
+                   )";
+        $userids = $DB->get_fieldset_sql($sql, ['cid' => $courseid]);
+
+        $count = 0;
+        foreach ($userids as $userid) {
+            $count += local_completionsuspend_reactivate_user((int)$userid, $courseid, $simulated);
+        }
+
+        return $count;
+    }
+
+    /**
+     * Return all course ids in a category, optionally descending into sub-categories.
+     *
+     * @param int   $catid Category id.
+     * @param bool  $cascade Whether to descend into sub-categories.
+     * @param array $seen Category ids already visited, guarding against cycles.
+     * @param int   $depth Current recursion depth.
+     * @return int[]
+     */
+    protected function courses_in_category(int $catid, bool $cascade, array $seen = [], int $depth = 0): array {
+        global $DB;
+
+        if (isset($seen[$catid]) || $depth >= self::MAX_CAT_DEPTH) {
+            return [];
+        }
+        $seen[$catid] = true;
 
         $ids = $DB->get_fieldset_select('course', 'id', 'category = :cid', ['cid' => $catid]);
 
-        if (get_config('local_completionsuspend', 'includesubcategories')) {
+        if ($cascade) {
             $subcats = $DB->get_fieldset_select('course_categories', 'id', 'parent = :cid', ['cid' => $catid]);
             foreach ($subcats as $sub) {
-                $ids = array_merge($ids, $this->courses_in_category((int)$sub));
+                $ids = array_merge($ids, $this->courses_in_category((int)$sub, true, $seen, $depth + 1));
             }
         }
+
         return $ids;
     }
 }
