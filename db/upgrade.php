@@ -29,18 +29,31 @@
  * @return bool
  */
 function xmldb_local_completionsuspend_upgrade(int $oldversion): bool {
-    global $DB;
+    global $CFG, $DB;
 
     $dbman = $DB->get_manager();
+    $installfile = $CFG->dirroot . '/local/completionsuspend/db/install.xml';
 
-    if ($oldversion < 2026082900) {
+    if ($oldversion < 2026082902) {
+        // A site can reach an upgrade with one of the plugin's tables missing: a partial
+        // uninstall, a restore from a dump that excluded them, or an install that failed
+        // after the version was recorded. Recreate anything absent from install.xml first,
+        // because field_exists() throws ddl_table_missing_exception on a missing table.
+        foreach (['local_completionsuspend_target', 'local_completionsuspend_log'] as $tablename) {
+            if (!$dbman->table_exists(new xmldb_table($tablename))) {
+                $dbman->install_one_table_from_xmldb_file($installfile, $tablename);
+            }
+        }
+
+        // Anything created just now already carries the current schema, so the migrations
+        // below are all guarded and simply no-op in that case.
         $table = new xmldb_table('local_completionsuspend_log');
 
-        // The old column was named "trigger", which is a reserved word in MySQL and MariaDB.
-        // Every insert against it failed with a syntax error, so the table is expected to be
-        // empty; the rename is still performed so that any manually inserted rows survive.
+        // The old column was named "trigger", a reserved word in MySQL and MariaDB. Every
+        // insert against it failed with a syntax error, so the table is expected to be
+        // empty; the rename is still performed so any manually inserted rows survive.
         $oldfield = new xmldb_field('trigger', XMLDB_TYPE_CHAR, '10', null, XMLDB_NOTNULL, null, 'event', 'action');
-        if ($dbman->field_exists($table, $oldfield)) {
+        if ($dbman->field_exists($table, $oldfield) && !$dbman->field_exists($table, 'triggertype')) {
             $dbman->rename_field($table, $oldfield, 'triggertype');
         }
 
@@ -56,7 +69,7 @@ function xmldb_local_completionsuspend_upgrade(int $oldversion): bool {
             $dbman->add_index($table, $index);
         }
 
-        upgrade_plugin_savepoint(true, 2026082900, 'local', 'completionsuspend');
+        upgrade_plugin_savepoint(true, 2026082902, 'local', 'completionsuspend');
     }
 
     return true;
